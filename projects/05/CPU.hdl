@@ -1,0 +1,98 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+/**
+ * The Hack Central Processing unit (CPU).
+ * Parses the binary code in the instruction input and executes it according to the
+ * Hack machine language specification. In the case of a C-instruction, computes the
+ * function specified by the instruction. If the instruction specifies to read a memory
+ * value, the inM input is expected to contain this value. If the instruction specifies
+ * to write a value to the memory, sets the outM output to this value, sets the addressM
+ * output to the target address, and asserts the writeM output (when writeM == 0, any
+ * value may appear in outM).
+ * If the reset input is 0, computes the address of the next instruction and sets the
+ * pc output to that value. If the reset input is 1, sets pc to 0.
+ * Note: The outM and writeM outputs are combinational: they are affected by the
+ * instruction's execution during the current cycle. The addressM and pc outputs are
+ * clocked: although they are affected by the instruction's execution, they commit to
+ * their new values only in the next cycle.
+ */
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to restart the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // Address of next instruction
+
+    PARTS:
+    // 1 1 1 a c1 c2 c3 c4 c5 c6 d1 d2 d3 j1 j2 j3
+    // instruction[15] = opcode
+    // instruction[6..12] (cX) = ALU control bits
+    // instruction[3..5] (dX) = destination control bits
+    // instruction[0..2] (jX) = jump control bits
+
+    // Determine instruction type
+    DMux(in=true, sel=instruction[15], a=AInstruction, b=CInstruction);
+
+    // Instruction decoding
+    Mux16(a=instruction, b=ALUOut, sel=instruction[15], out=ARegisterInput);
+
+    // A Register
+    // If either A instruction or A register is a set destination, then set load bit in A register to 1
+    Or(a=AInstruction, b=instruction[5], out=LoadA);
+    ARegister(in=ARegisterInput, load=LoadA, out=ARegisterOut, out[0..14]=addressM);
+    
+    // D Register
+    // If C instruction and D is a set destination, then set load bit in D register to 1
+    And(a=CInstruction, b=instruction[4], out=LoadD);
+    DRegister(in=ALUOut, load=LoadD, out=DRegisterOut);
+
+    // ALU input
+    // a = 1, input from M
+    // a = 0, input from A
+    Mux16(a=ARegisterOut, b=inM, sel=instruction[12], out=ALUIn);
+    
+    // ALU
+    ALU(x=DRegisterOut, y=ALUIn, zx=instruction[11], nx=instruction[10], zy=instruction[9], ny=instruction[8], 
+                                 f=instruction[7], no=instruction[6], out=ALUOut, out=outM, zr=zr, ng=ng);
+    
+    // writeM out only if C instruction and 3rd bit is 1
+    And(a=CInstruction, b=instruction[3], out=writeM);
+
+    // PC instructions
+    Not(in=ng, out=NLT);
+    Not(in=zr, out=NEQ);
+    And(a=NEQ, b=NLT, out=GT);
+    
+    // JGT
+    And(a=instruction[0], b=GT, out=JGT);
+    // JEQ
+    And(a=zr, b=instruction[1], out=JEQ);
+    // JLT
+    And(a=ng, b=instruction[2], out=JLT);
+    // JGE
+    Or(a=JGT, b=JEQ, out=JGE);
+    // JNE
+    Or(a=JLT, b=JGT, out=JNE);
+    // JLE
+    Or(a=JLT, b=JEQ, out=JLE);
+    // JMP - Unconditional jump
+    Or(a=JEQ, b=JNE, out=JMP);
+    
+    // Jump?
+    Or(a=JGE, b=JLE, out=Jump1);
+    Or(a=Jump1, b=JNE, out=Jump2);
+    Or(a=Jump2, b=JMP, out=Jump3);
+    And(a=instruction[15], b=Jump3, out=Jump);
+    Not(in=Jump, out=NoJump);
+    
+    // PC
+    PC(in=ARegisterOut, load=Jump, inc=NoJump, reset=reset, out[0..14]=pc);
+}
